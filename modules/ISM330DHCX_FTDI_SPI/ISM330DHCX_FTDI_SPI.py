@@ -302,6 +302,11 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         result = value * scale_factor * sensitivity * gravity
         return result
 
+    def enableAcc(self):
+        odr = self.__odr_xl
+        scale = self.__scale_xl
+        self.__setupXL(odr, scale)
+
     def disableAcc(self):
         self.__powerDownXL()
 
@@ -360,6 +365,11 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         sensitivity = self.__sensitivity_gyro
         result = value * scale_facotr * sensitivity
         return result
+
+    def enableGyro(self):
+        odr = self.__odr_gyro
+        scale = self.__scale_gyro
+        self.__setupGyro(odr, scale)
 
     def disableGyro(self):
         self.__powerDownGyro()

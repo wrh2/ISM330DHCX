@@ -1,4 +1,4 @@
-from ISM330DHCX import ISM330DHCX_FTDI_SPI
+from ISM330DHCX_FTDI_SPI import ISM330DHCX_FTDI_SPI
 import time
 import sys
 

@@ -1,4 +1,4 @@
-from ISM330DHCX import ISM330DHCX_FTDI_SPI
+from ISM330DHCX_FTDI_SPI import ISM330DHCX_FTDI_SPI
 import unittest
 
 class TestISM330DHCX_FTDI_SPI(unittest.TestCase):
@@ -7,8 +7,13 @@ class TestISM330DHCX_FTDI_SPI(unittest.TestCase):
         imu = ISM330DHCX_FTDI_SPI()
         self.assertEqual(imu.whoAmI, ISM330DHCX_WHO_AM_I_VAL)
 
-    def test_acc_enabled(self):
+    def test_acc_enabled_init(self):
         imu = ISM330DHCX_FTDI_SPI(enable_xl=True)
+        self.assertEqual(imu.accEnabled, True)
+
+    def test_acc_enabled_after_init(self):
+        imu = ISM330DHCX_FTDI_SPI()
+        imu.enableAcc()
         self.assertEqual(imu.accEnabled, True)
 
     def test_acc_disabled(self):
@@ -16,8 +21,13 @@ class TestISM330DHCX_FTDI_SPI(unittest.TestCase):
         imu.disableAcc()
         self.assertEqual(imu.accEnabled, False)
 
-    def test_gyro_enabled(self):
+    def test_gyro_enabled_init(self):
         imu = ISM330DHCX_FTDI_SPI(enable_gyro=True)
+        self.assertEqual(imu.gyroEnabled, True)
+
+    def test_gyro_enabled_after_init(self):
+        imu = ISM330DHCX_FTDI_SPI()
+        imu.enableGyro()
         self.assertEqual(imu.gyroEnabled, True)
 
     def test_gyro_disabled(self):
