@@ -84,7 +84,7 @@ ISM330DHCX_Embedded_Function_Registers = {
 
 }
 
-ISM330DHCX_Output_Data_Rates = {
+ISM330DHCX_XL_Output_Data_Rates = {
     'ODR_POWER_DOWN': 0,
     'ODR_1_6HZ': 0xB, # Only works when high performance mode disabled
     'ODR_12_5HZ': 0x1,
@@ -99,37 +99,62 @@ ISM330DHCX_Output_Data_Rates = {
     'ODR_6_66KHZ': 0xA,
 }
 
-ISM330DHCX_Scale_Selection = {
-    'SCALE_2G': (0, 2),
-    'SCALE_16G': (1, 16),
-    'SCALE_4G': (2, 4),
-    'SCALE_8G': (3, 8),
+ISM330DHCX_XL_Scale_Selection = {
+    'SCALE_2G': (0, 1), # (bit value, scale factor for sensitivity)
+    'SCALE_16G': (1, 8),
+    'SCALE_4G': (2, 2),
+    'SCALE_8G': (3, 4),
 }
 
+ISM330DHCX_Gyro_Output_Data_Rates = {
+    'ODR_POWER_DOWN': 0,
+    'ODR_12_5HZ': 0x1,
+    'ODR_26HZ': 0x2,
+    'ODR_52HZ': 0x3,
+    'ODR_104HZ': 0x4,
+    'ODR_208HZ': 0x5,
+    'ODR_416HZ': 0x6,
+    'ODR_833HZ': 0x7,
+    'ODR_1_66KHZ': 0x8,
+    'ODR_3_33KHZ': 0x9,
+    'ODR_6_66KHZ': 0xA,
+}
+
+ISM330DHCX_Gyro_Scale_Selection = {
+    '250DPS': (0, 2), # (bit value, scale factor for sensitivity)
+    '500DPS': (1, 4),
+    '1000DPS': (2, 8),
+    '2000DPS': (3, 16),
+}
+
+# SPI Interface
 ISM330DHCX_DEFAULT_FTDI_SPI_INTERFACE_NUM = '1'
 ISM330DHCX_DEFAULT_SPI_BITRATE = int(1e6)
 ISM330DHCX_MAX_SPI_BITRATE = int(10e6)
-ISM330DHCX_DEFAULT_ODR = ISM330DHCX_Output_Data_Rates['ODR_416HZ']
-ISM330DHCX_DEFAULT_SCALE_SELECTION = ISM330DHCX_Scale_Selection['SCALE_8G']
+
+# Accelerometer settings
+ISM330DHCX_DEFAULT_XL_ODR = ISM330DHCX_XL_Output_Data_Rates['ODR_416HZ']
+ISM330DHCX_DEFAULT_XL_SCALE_SELECTION = ISM330DHCX_XL_Scale_Selection['SCALE_8G']
 ISM330DHCX_DEFAULT_XL_SENSITIVITY = .061 * 1e-3 #mg/LSB
+ISM330DHCX_DEFAULT_XL_GRAVITATIONAL_CONSTANT = 9.81 # assume earth,
+                                                    # but yeah maybe you're on the moon or in the ISS or something with an FTDI mini module playing around with ISM330DHCX
+                                                    # so yeah change this if you need to
+
+# Gyro settings
+ISM330DHCX_DEFAULT_GYRO_ODR = ISM330DHCX_Gyro_Output_Data_Rates['ODR_416HZ']
+ISM330DHCX_DEFAULT_GYRO_SCALE_SELECTION = ISM330DHCX_Gyro_Scale_Selection['2000DPS']
 ISM330DHCX_DEFAULT_GYRO_SENSITIVITY = 4.375 * 1e-3 # mdps/LSB
 
 
 class ISM330DHCX_FTDI_SPI(SpiController):
 
     def __init__(self, cs_count: int = 1, turbo: bool = True, ftdi_interface_num: str = ISM330DHCX_DEFAULT_FTDI_SPI_INTERFACE_NUM, bitrate: int = ISM330DHCX_DEFAULT_SPI_BITRATE,
-                       enable_xl: bool = False, odr_xl: int = ISM330DHCX_DEFAULT_ODR, scale_xl: int = ISM330DHCX_DEFAULT_SCALE_SELECTION, sensitivity_xl: float = ISM330DHCX_DEFAULT_XL_SENSITIVITY,
-                       enable_gyro: bool = False, odr_gyro: int = ISM330DHCX_DEFAULT_ODR, scale_gyro: int = ISM330DHCX_DEFAULT_SCALE_SELECTION, sensitivity_gyro: float = ISM330DHCX_DEFAULT_GYRO_SENSITIVITY):
+                       enable_xl: bool = False, odr_xl: int = ISM330DHCX_DEFAULT_XL_ODR, scale_xl: int = ISM330DHCX_DEFAULT_XL_SCALE_SELECTION, sensitivity_xl: float = ISM330DHCX_DEFAULT_XL_SENSITIVITY, gravity_xl: float = ISM330DHCX_DEFAULT_XL_GRAVITATIONAL_CONSTANT, 
+                       enable_gyro: bool = False, odr_gyro: int = ISM330DHCX_DEFAULT_GYRO_ODR, scale_gyro: int = ISM330DHCX_DEFAULT_GYRO_SCALE_SELECTION, sensitivity_gyro: float = ISM330DHCX_DEFAULT_GYRO_SENSITIVITY):
 
         super().__init__(cs_count, turbo)
 
-        if ftdi_interface_num != '1' and ftdi_interface_num != '2':
-            raise ValueError('ftdi_interface_num invalid')
-
-        self.configure('ftdi:///' + ftdi_interface_num)
-
-        ISM330DHCX_DEFAULT_PYFTDI_SPI_MODE = 3
-        self.__slave = self.get_port(0, freq=bitrate, mode=ISM330DHCX_DEFAULT_PYFTDI_SPI_MODE)
+        self.__setupFtdiSpi(ftdi_interface_num, bitrate)
 
         self.__setupRegisterMap()
         self.__getWhoAmI()
@@ -137,12 +162,28 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         self.__acc_enabled = False
         self.__gyro_enabled = False
 
+        # accelerometer constants
+        self.__setupXLConstants(sensitivity_xl, odr_xl, scale_xl, gravity_xl)
+
+        # gyro constants
+        self.__setupGyroConstants(sensitivity_gyro, odr_gyro, scale_gyro)
+
         if enable_xl:
             self.__setupXL(odr_xl, scale_xl)
 
         if enable_gyro:
             self.__setupGyro(odr_gyro, scale_gyro)
 
+    def __setupFtdiSpi(self, ftdi_interface_num, bitrate):
+
+        # make sure its a valid interface
+        if ftdi_interface_num != '1' and ftdi_interface_num != '2':
+            raise ValueError('ftdi_interface_num invalid')
+
+        self.configure('ftdi:///' + ftdi_interface_num)
+
+        ISM330DHCX_DEFAULT_PYFTDI_SPI_MODE = 3
+        self.__slave = self.get_port(0, freq=bitrate, mode=ISM330DHCX_DEFAULT_PYFTDI_SPI_MODE)
 
     def __setupRegisterMap(self):
         
@@ -155,8 +196,6 @@ class ISM330DHCX_FTDI_SPI(SpiController):
     def __writeRegister(self, reg, d):
         msg = [reg]
         to_send = msg + d
-        #print(len(to_send))
-        #self.__slave.exchange(to_send, len(to_send))
         self.__slave.exchange(to_send)
 
     def __readRegister(self, reg, l):
@@ -170,6 +209,33 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         whoAmIReadLength = 1
         self.__whoAmI = self.__readRegister(whoAmIRegisterAddress, whoAmIReadLength)[0] # turn bytearray to int
 
+    def __setupXLConstants(self, sensitivity_xl, odr_xl, scale_xl, gravity_xl):
+        self.__gravity_xl = gravity_xl
+        self.__sensitivity_xl = sensitivity_xl
+        self.__odr_xl = odr_xl #if odr_xl in ISM330DHCX_XL_Output_Data_Rates else None
+        self.__scale_xl = scale_xl #if scale_xl in ISM330DHCX_XL_Scale_Selection else None
+        
+        """
+        if self.__odr_xl is None:
+            raise ValueError('Invalid ODR for XL: %s' % odr_xl)
+
+        if self.__scale_xl is None:
+            raise ValueError('Invalid SCALE for XL: %s' % scale_xl)
+        """
+
+    def __setupGyroConstants(self, sensitivity_gyro, odr_gyro, scale_gyro):
+        self.__sensitivity_gyro = sensitivity_gyro
+        self.__odr_gyro = odr_gyro #if odr_gyro in ISM330DHCX_Gyro_Output_Data_Rates else None
+        self.__scale_gyro = scale_gyro #if scale_gyro in ISM330DHCX_Gyro_Scale_Selection else None
+
+        """
+        if self.__odr_gyro is None:
+            raise ValueError('Invalid ODR for Gyro')
+
+        if self.__scale_gyro is None:
+            raise ValueError('Invalid SCALE for Gyro')
+        """
+
     def __setupXL(self, odr, scale):
         ctrl1XLRegisterAddress = self.__regs['CTRL1_XL']
         ODR_XL_SHIFT = 4
@@ -179,8 +245,6 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         self.__writeRegister(ctrl1XLRegisterAddress, d)
         if self.__readRegister(ctrl1XLRegisterAddress, 1)[0] == ctrl1XLSetting:
             self.__acc_enabled = True
-            self.__odr_xl = odr
-            self.__scale_xl = scale
 
     def __powerDownXL(self):
         ctrl1XLRegisterAddress = self.__regs['CTRL1_XL']
@@ -194,7 +258,25 @@ class ISM330DHCX_FTDI_SPI(SpiController):
                 self.__acc_enabled = False
 
     def __setupGyro(self, odr, scale):
-        pass
+        ctrl2GRegisterAddress = self.__regs['CTRL2_G']
+        ODR_G_SHIFT = 4
+        FS_G_SHIFT = 2
+        ctrl2GSetting = (odr << ODR_G_SHIFT) | (scale[0] << FS_G_SHIFT)
+        d = [ctrl2GSetting]
+        self.__writeRegister(ctrl2GRegisterAddress, d)
+        if self.__readRegister(ctrl2GRegisterAddress, 1)[0] == ctrl2GSetting:
+            self.__gyro_enabled = True
+
+    def __powerDownGyro(self):
+        ctrl2GRegisterAddress = self.__regs['CTRL2_G']
+        ODR_G_SHIFT = 4
+        FS_G_SHIFT = 2
+        if self.__gyro_enabled:
+            ctrl2GSetting = (0 << ODR_G_SHIFT) | (self.__scale_gyro[0] << FS_G_SHIFT)
+            d = [ctrl2GSetting]
+            self.__writeRegister(ctrl2GRegisterAddress, d)
+            if self.__readRegister(ctrl2GRegisterAddress, 1)[0] == ctrl2GSetting:
+                self.__gyro_enabled = False
 
     def __getStatusRegister(self):
         statusRegisterAddress = self.__regs['STATUS_REG']
@@ -213,7 +295,12 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         return self.__readRegister(outXRegisterAddress, 2)
 
     def __calcAccData(self, d):
-        return c_int16(d).value*ISM330DHCX_DEFAULT_XL_SENSITIVITY*(self.__scale_xl[1] >> 1)*9.81
+        value = c_int16(d).value
+        scale_factor = self.__scale_xl[1]
+        sensitivity = self.__sensitivity_xl
+        gravity = self.__gravity_xl
+        result = value * scale_factor * sensitivity * gravity
+        return result
 
     def disableAcc(self):
         self.__powerDownXL()
@@ -251,8 +338,67 @@ class ISM330DHCX_FTDI_SPI(SpiController):
             result = result_x + result_y + result_z
             if not raw:
                 result = [self.__calcAccData(result_x[1] << 8 | result_x[0]),
-                        self.__calcAccData(result_y[1] << 8 | result_y[0]),
-                        self.__calcAccData(result_z[1] << 8 | result_z[0])]
+                          self.__calcAccData(result_y[1] << 8 | result_y[0]),
+                          self.__calcAccData(result_z[1] << 8 | result_z[0])]
+        return result
+
+    def __getDataGyroX(self):
+        outXRegisterAddress = self.__regs['OUTX_L_G']
+        return self.__readRegister(outXRegisterAddress, 2)
+
+    def __getDataGyroY(self):
+        outXRegisterAddress = self.__regs['OUTY_L_G']
+        return self.__readRegister(outXRegisterAddress, 2)
+
+    def __getDataGyroZ(self):
+        outXRegisterAddress = self.__regs['OUTZ_L_G']
+        return self.__readRegister(outXRegisterAddress, 2)
+
+    def __calcGyroData(self, d):
+        value = c_int16(d).value
+        scale_facotr = self.__scale_xl[1]
+        sensitivity = self.__sensitivity_gyro
+        result = value * scale_facotr * sensitivity
+        return result
+
+    def disableGyro(self):
+        self.__powerDownGyro()
+
+    def getGyroDataX(self, raw=False):
+        result = None
+        if self.__acc_enabled:
+            result = self.__getDataGyroX()
+            if not raw:
+                result = self.__calcGyroData(result[1] << 8 | result[0])
+        return result
+
+    def getGyroDataY(self, raw=False):
+        result = None
+        if self.__acc_enabled:
+            result = self.__getDataGyroY()
+            if not raw:
+                result = self.__calcGyroData(result[1] << 8 | result[0])
+        return result
+
+    def getGyroDataZ(self, raw=False):
+        result = None
+        if self.__acc_enabled:
+            result = self.__getDataGyroZ()
+            if not raw:
+                result = self.__calcGyroData(result[1] << 8 | result[0])
+        return result
+
+    def getGyroDataXYZ(self, raw=False):
+        result = None
+        if self.__acc_enabled:
+            result_x = self.__getDataGyroX()
+            result_y = self.__getDataGyroY()
+            result_z = self.__getDataGyroZ()
+            result = result_x + result_y + result_z
+            if not raw:
+                result = [self.__calcGyroData(result_x[1] << 8 | result_x[0]),
+                          self.__calcGyroData(result_y[1] << 8 | result_y[0]),
+                          self.__calcGyroData(result_z[1] << 8 | result_z[0])]
         return result
 
     def getStatus(self):
@@ -265,3 +411,7 @@ class ISM330DHCX_FTDI_SPI(SpiController):
     @property
     def accEnabled(self):
         return self.__acc_enabled
+
+    @property
+    def gyroEnabled(self):
+        return self.__gyro_enabled
