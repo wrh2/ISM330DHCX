@@ -7,5 +7,14 @@ class TestISM330DHCX_FTDI_SPI(unittest.TestCase):
         imu = ISM330DHCX_FTDI_SPI()
         self.assertEqual(imu.whoAmI, ISM330DHCX_WHO_AM_I_VAL)
 
+    def test_acc_enabled(self):
+        imu = ISM330DHCX_FTDI_SPI(enable_xl=True)
+        self.assertEqual(imu.accEnabled, True)
+
+    def test_acc_disabled(self):
+        imu = ISM330DHCX_FTDI_SPI(enable_xl=True)
+        imu.disableAcc()
+        self.assertEqual(imu.accEnabled, False)
+
 if __name__ == '__main__':
     unittest.main()

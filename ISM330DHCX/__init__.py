@@ -6,4 +6,4 @@ __doc__ = __description__ + ' <' + __uri__ + '> '
 __license__ = 'GNU GPLv2'
 __copyright__ = 'Copyright (c) 2022 Will Harrington'
 
-from .ISM330DHCX import *
+from .ISM330DHCX_FTDI_SPI import *
