@@ -132,6 +132,8 @@ ISM330DHCX_DEFAULT_FTDI_SPI_INTERFACE_NUM = '1'
 ISM330DHCX_DEFAULT_SPI_BITRATE = int(1e6)
 ISM330DHCX_MAX_SPI_BITRATE = int(10e6)
 
+ISM330DHCX_WHO_AM_I_VAL = 0x6b
+
 # Accelerometer settings
 ISM330DHCX_DEFAULT_XL_ODR = ISM330DHCX_XL_Output_Data_Rates['ODR_416HZ']
 ISM330DHCX_DEFAULT_XL_SCALE_SELECTION = ISM330DHCX_XL_Scale_Selection['SCALE_8G']
@@ -139,18 +141,21 @@ ISM330DHCX_DEFAULT_XL_SENSITIVITY = .061 * 1e-3 #mg/LSB
 ISM330DHCX_DEFAULT_XL_GRAVITATIONAL_CONSTANT = 9.81 # assume earth,
                                                     # but yeah maybe you're on the moon or in the ISS or something with an FTDI mini module playing around with ISM330DHCX
                                                     # so yeah change this if you need to
+ISM330DHCX_DEFAULT_XL_INT_PIN = 'INT1'
 
 # Gyro settings
 ISM330DHCX_DEFAULT_GYRO_ODR = ISM330DHCX_Gyro_Output_Data_Rates['ODR_416HZ']
 ISM330DHCX_DEFAULT_GYRO_SCALE_SELECTION = ISM330DHCX_Gyro_Scale_Selection['2000DPS']
 ISM330DHCX_DEFAULT_GYRO_SENSITIVITY = 4.375 * 1e-3 # mdps/LSB
+ISM330DHCX_DEFAULT_GYRO_INT_PIN = 'INT1'
 
 
 class ISM330DHCX_FTDI_SPI(SpiController):
 
     def __init__(self, cs_count: int = 1, turbo: bool = True, ftdi_interface_num: str = ISM330DHCX_DEFAULT_FTDI_SPI_INTERFACE_NUM, bitrate: int = ISM330DHCX_DEFAULT_SPI_BITRATE,
                        enable_xl: bool = False, odr_xl: int = ISM330DHCX_DEFAULT_XL_ODR, scale_xl: int = ISM330DHCX_DEFAULT_XL_SCALE_SELECTION, sensitivity_xl: float = ISM330DHCX_DEFAULT_XL_SENSITIVITY, gravity_xl: float = ISM330DHCX_DEFAULT_XL_GRAVITATIONAL_CONSTANT, 
-                       enable_gyro: bool = False, odr_gyro: int = ISM330DHCX_DEFAULT_GYRO_ODR, scale_gyro: int = ISM330DHCX_DEFAULT_GYRO_SCALE_SELECTION, sensitivity_gyro: float = ISM330DHCX_DEFAULT_GYRO_SENSITIVITY):
+                       enable_gyro: bool = False, odr_gyro: int = ISM330DHCX_DEFAULT_GYRO_ODR, scale_gyro: int = ISM330DHCX_DEFAULT_GYRO_SCALE_SELECTION, sensitivity_gyro: float = ISM330DHCX_DEFAULT_GYRO_SENSITIVITY,
+                       enable_xl_interrupt: bool = False, xl_interrupt_pin: str = ISM330DHCX_DEFAULT_XL_INT_PIN, enable_gyro_interrupt: bool = False, gyro_interrupt_pin: str = ISM330DHCX_DEFAULT_GYRO_INT_PIN):
 
         super().__init__(cs_count, turbo)
 
@@ -160,7 +165,10 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         self.__getWhoAmI()
 
         self.__acc_enabled = False
+        self.__acc_interrupt_enabled = False
+
         self.__gyro_enabled = False
+        self.__gyro_interrupt_enabled = False
 
         # accelerometer constants
         self.__setupXLConstants(sensitivity_xl, odr_xl, scale_xl, gravity_xl)
@@ -173,6 +181,12 @@ class ISM330DHCX_FTDI_SPI(SpiController):
 
         if enable_gyro:
             self.__setupGyro(odr_gyro, scale_gyro)
+
+        if enable_xl_interrupt:
+            self.__setupXLInterrupt(xl_interrupt_pin)
+
+        if enable_gyro_interrupt:
+            self.__setupGyroInterrupt(gyro_interrupt_pin)
 
     def __setupFtdiSpi(self, ftdi_interface_num, bitrate):
 
@@ -207,34 +221,25 @@ class ISM330DHCX_FTDI_SPI(SpiController):
     def __getWhoAmI(self):
         whoAmIRegisterAddress = self.__regs['WHO_AM_I']
         whoAmIReadLength = 1
-        self.__whoAmI = self.__readRegister(whoAmIRegisterAddress, whoAmIReadLength)[0] # turn bytearray to int
+        retries = 0
+        MAX_NUM_RETRIES = 10
+        self.__whoAmI = None
+        while self.__whoAmI != ISM330DHCX_WHO_AM_I_VAL:
+            if retries == MAX_NUM_RETRIES:
+                break
+            self.__whoAmI = self.__readRegister(whoAmIRegisterAddress, whoAmIReadLength)[0] # turn bytearray to int
+            retries +=1
 
     def __setupXLConstants(self, sensitivity_xl, odr_xl, scale_xl, gravity_xl):
         self.__gravity_xl = gravity_xl
         self.__sensitivity_xl = sensitivity_xl
-        self.__odr_xl = odr_xl #if odr_xl in ISM330DHCX_XL_Output_Data_Rates else None
-        self.__scale_xl = scale_xl #if scale_xl in ISM330DHCX_XL_Scale_Selection else None
-        
-        """
-        if self.__odr_xl is None:
-            raise ValueError('Invalid ODR for XL: %s' % odr_xl)
-
-        if self.__scale_xl is None:
-            raise ValueError('Invalid SCALE for XL: %s' % scale_xl)
-        """
+        self.__odr_xl = odr_xl
+        self.__scale_xl = scale_xl
 
     def __setupGyroConstants(self, sensitivity_gyro, odr_gyro, scale_gyro):
         self.__sensitivity_gyro = sensitivity_gyro
-        self.__odr_gyro = odr_gyro #if odr_gyro in ISM330DHCX_Gyro_Output_Data_Rates else None
-        self.__scale_gyro = scale_gyro #if scale_gyro in ISM330DHCX_Gyro_Scale_Selection else None
-
-        """
-        if self.__odr_gyro is None:
-            raise ValueError('Invalid ODR for Gyro')
-
-        if self.__scale_gyro is None:
-            raise ValueError('Invalid SCALE for Gyro')
-        """
+        self.__odr_gyro = odr_gyro
+        self.__scale_gyro = scale_gyro
 
     def __setupXL(self, odr, scale):
         ctrl1XLRegisterAddress = self.__regs['CTRL1_XL']
@@ -242,9 +247,16 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         FS_XL_SHIFT = 2
         ctrl1XLSetting = (odr << ODR_XL_SHIFT) | (scale[0] << FS_XL_SHIFT)
         d = [ctrl1XLSetting]
-        self.__writeRegister(ctrl1XLRegisterAddress, d)
-        if self.__readRegister(ctrl1XLRegisterAddress, 1)[0] == ctrl1XLSetting:
-            self.__acc_enabled = True
+
+        MAX_NUM_RETRIES = 10
+        retries = 0
+        while not self.__acc_enabled:
+            if retries == MAX_NUM_RETRIES:
+                break
+            self.__writeRegister(ctrl1XLRegisterAddress, d)
+            if self.__readRegister(ctrl1XLRegisterAddress, 1)[0] == ctrl1XLSetting:
+                self.__acc_enabled = True
+            retries += 1
 
     def __powerDownXL(self):
         ctrl1XLRegisterAddress = self.__regs['CTRL1_XL']
@@ -253,9 +265,16 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         if self.__acc_enabled:
             ctrl1XLSetting = (0x0 << ODR_XL_SHIFT) | (self.__scale_xl[0] << FS_XL_SHIFT)
             d = [ctrl1XLSetting]
-            self.__writeRegister(ctrl1XLRegisterAddress, d)
-            if self.__readRegister(ctrl1XLRegisterAddress, 1)[0] == ctrl1XLSetting:
-                self.__acc_enabled = False
+
+            MAX_NUM_RETRIES = 10
+            retries = 0
+            while self.__acc_enabled:
+                if retries == MAX_NUM_RETRIES:
+                    break
+                self.__writeRegister(ctrl1XLRegisterAddress, d)
+                if self.__readRegister(ctrl1XLRegisterAddress, 1)[0] == ctrl1XLSetting:
+                    self.__acc_enabled = False
+                retries += 1
 
     def __setupGyro(self, odr, scale):
         ctrl2GRegisterAddress = self.__regs['CTRL2_G']
@@ -263,9 +282,16 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         FS_G_SHIFT = 2
         ctrl2GSetting = (odr << ODR_G_SHIFT) | (scale[0] << FS_G_SHIFT)
         d = [ctrl2GSetting]
-        self.__writeRegister(ctrl2GRegisterAddress, d)
-        if self.__readRegister(ctrl2GRegisterAddress, 1)[0] == ctrl2GSetting:
-            self.__gyro_enabled = True
+
+        MAX_NUM_RETIRES = 10
+        retries = 0
+        while not self.__gyro_enabled:
+            if retries == MAX_NUM_RETIRES:
+                break
+            self.__writeRegister(ctrl2GRegisterAddress, d)
+            if self.__readRegister(ctrl2GRegisterAddress, 1)[0] == ctrl2GSetting:
+                self.__gyro_enabled = True
+            retries += 1
 
     def __powerDownGyro(self):
         ctrl2GRegisterAddress = self.__regs['CTRL2_G']
@@ -274,9 +300,97 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         if self.__gyro_enabled:
             ctrl2GSetting = (0 << ODR_G_SHIFT) | (self.__scale_gyro[0] << FS_G_SHIFT)
             d = [ctrl2GSetting]
-            self.__writeRegister(ctrl2GRegisterAddress, d)
-            if self.__readRegister(ctrl2GRegisterAddress, 1)[0] == ctrl2GSetting:
-                self.__gyro_enabled = False
+
+            MAX_NUM_RETIRES = 10
+            retries = 0
+            while self.__gyro_enabled:
+                if retries == MAX_NUM_RETIRES:
+                    break
+                self.__writeRegister(ctrl2GRegisterAddress, d)
+                if self.__readRegister(ctrl2GRegisterAddress, 1)[0] == ctrl2GSetting:
+                    self.__gyro_enabled = False
+                retries += 1
+
+    def __getIntCtrlRegister(self, pin):
+        register = None
+        if pin == 'INT1':
+            register = self.__regs['INT1_CTRL']
+        elif pin == 'INT2':
+            register = self.__regs['INT2_CTRL']
+        else:
+            raise ValueError('Invalid interrput pin, must be INT1 or INT2')
+        return register
+
+    def __setupXLInterrupt(self, pin):
+        intCtrlRegisterAddress = self.__getIntCtrlRegister(pin)
+        accDataReadyShift = 0
+        accDataReadyMask = (1 << accDataReadyShift)
+        intCtrlRegisterValue = self.__readRegister(intCtrlRegisterAddress, 1)[0] | accDataReadyMask
+        d = [intCtrlRegisterValue]
+
+        MAX_NUM_RETRIES = 10
+        retries = 0
+        while not self.__acc_interrupt_enabled:
+            if retries == MAX_NUM_RETRIES:
+                break
+            self.__writeRegister(intCtrlRegisterAddress, d)
+            self.__acc_interrupt_enabled = bool(self.__readRegister(intCtrlRegisterAddress, 1)[0] & accDataReadyMask)
+            if self.__acc_interrupt_enabled:
+                self.__acc_interrupt_pin = pin
+            retries += 1
+
+    def __disableXLInterrupt(self):
+        accDataReadyShift = 0
+        accDataReadyMask = (1 << accDataReadyShift)
+        if self.__acc_interrupt_enabled:
+            intCtrlRegisterAddress = self.__getIntCtrlRegister(self.__acc_interrupt_pin)
+            intCtrlRegisterValue = self.__readRegister(intCtrlRegisterAddress, 1)[0]
+            intCtrlRegisterValue &= ~accDataReadyMask
+            d = [intCtrlRegisterValue]
+
+            retries = 0
+            MAX_NUM_RETRIES = 10
+            while self.__acc_interrupt_enabled:
+                if retries == MAX_NUM_RETRIES:
+                    break
+                self.__writeRegister(intCtrlRegisterAddress, d)
+                self.__acc_interrupt_enabled = bool(self.__readRegister(intCtrlRegisterAddress, 1)[0] & accDataReadyMask)
+                retries += 1
+
+    def __setupGyroInterrupt(self, pin):
+        intCtrlRegisterAddress = self.__getIntCtrlRegister(pin)
+        gyroDataReadyShift = 1
+        intCtrlRegisterValue = self.__readRegister(intCtrlRegisterAddress, 1)[0] | (1 << gyroDataReadyShift)
+        d = [intCtrlRegisterValue]
+
+        retries = 0
+        MAX_NUM_RETRIES = 10
+        while not self.__gyro_interrupt_enabled:
+            if retries == MAX_NUM_RETRIES:
+                break
+            self.__writeRegister(intCtrlRegisterAddress, d)
+            self.__gyro_interrupt_enabled = bool(self.__readRegister(intCtrlRegisterAddress, 1)[0] & 0x1)
+            if self.__gyro_interrupt_enabled:
+                self.__gyro_interrupt_pin = pin
+            retries += 1
+
+    def __disableGyroInterrupt(self):
+        gyroDataReadyShift = 1
+        gyroDataReadyMask = (1 << gyroDataReadyShift)
+        if self.__gyro_interrupt_enabled:
+            intCtrlRegisterAddress = self.__getIntCtrlRegister(self.__gyro_interrupt_pin)
+            intCtrlRegisterValue = self.__readRegister(intCtrlRegisterAddress, 1)[0]
+            intCtrlRegisterValue &= ~gyroDataReadyMask
+            d = [intCtrlRegisterValue]
+
+            retries = 0
+            MAX_NUM_RETRIES = 10
+            while self.__gyro_interrupt_enabled:
+                if retries == MAX_NUM_RETRIES:
+                    break
+                self.__writeRegister(intCtrlRegisterAddress, d)
+                self.__gyro_interrupt_enabled = bool(self.__readRegister(intCtrlRegisterAddress, 1)[0] & gyroDataReadyMask)
+                retries += 1
 
     def __getStatusRegister(self):
         statusRegisterAddress = self.__regs['STATUS_REG']
@@ -308,7 +422,14 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         self.__setupXL(odr, scale)
 
     def disableAcc(self):
+        self.__disableXLInterrupt()
         self.__powerDownXL()
+
+    def enableAccInterrupt(self, pin):
+        self.__setupXLInterrupt(pin)
+
+    def disableAccInterrupt(self):
+        self.__disableXLInterrupt()
 
     def getAccDataX(self, raw=False):
         result = None
@@ -372,7 +493,14 @@ class ISM330DHCX_FTDI_SPI(SpiController):
         self.__setupGyro(odr, scale)
 
     def disableGyro(self):
+        self.__disableGyroInterrupt()
         self.__powerDownGyro()
+
+    def enableGyroInterrupt(self, pin):
+        self.__setupGyroInterrupt(pin)
+
+    def disableGyroInterrupt(self):
+        self.__disableGyroInterrupt()
 
     def getGyroDataX(self, raw=False):
         result = None
@@ -425,3 +553,19 @@ class ISM330DHCX_FTDI_SPI(SpiController):
     @property
     def gyroEnabled(self):
         return self.__gyro_enabled
+
+    @property
+    def accInterruptEnabled(self):
+        return self.__acc_interrupt_enabled
+
+    @property
+    def accInterruptPin(self):
+        return self.__acc_interrupt_pin
+
+    @property
+    def gyroInterruptEnabled(self):
+        return self.__gyro_interrupt_enabled
+
+    @property
+    def gyroInterruptPin(self):
+        return self.__gyro_interrupt_pin
